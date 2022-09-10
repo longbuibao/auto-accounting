@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json.schemastore.org/nest-cli",
+  "collection": "@nestjs/schematics",
+  "sourceRoot": "apps/accouting/src",
+  "monorepo": true,
+  "root": "apps/accouting",
+  "compilerOptions": {
+    "webpack": true,
+    "tsConfigPath": "apps/accouting/tsconfig.app.json"
+  },
+  "projects": {
+    "accouting": {
+      "type": "application",
+      "root": "apps/accouting",
+      "entryFile": "main",
+      "sourceRoot": "apps/accouting/src",
+      "compilerOptions": {
+        "tsConfigPath": "apps/accouting/tsconfig.app.json"
+      }
+    },
+    "auth": {
+      "type": "application",
+      "root": "apps/auth",
+      "entryFile": "main",
+      "sourceRoot": "apps/auth/src",
+      "compilerOptions": {
+        "tsConfigPath": "apps/auth/tsconfig.app.json"
+      }
+    },
+    "sheet": {
+      "type": "application",
+      "root": "apps/sheet",
+      "entryFile": "main",
+      "sourceRoot": "apps/sheet/src",
+      "compilerOptions": {
+        "tsConfigPath": "apps/sheet/tsconfig.app.json"
+      }
+    },
+    "common": {
+      "type": "library",
+      "root": "libs/common",
+      "entryFile": "index",
+      "sourceRoot": "libs/common/src",
+      "compilerOptions": {
+        "tsConfigPath": "libs/common/tsconfig.lib.json"
+      }
+    }
+  }
+}
