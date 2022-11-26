@@ -1,0 +1,78 @@
+#!/usr/bin/env bash
+
+# shellcheck source=./lib/bash/core.sh
+source "${BASH_SOURCE[0]%/*}/../lib/bash/core.sh"
+
+# shellcheck source=./lib/bash/templates.sh
+source "${BASH_SOURCE[0]%/*}/../lib/bash/templates.sh"
+
+# shellcheck source=./lib/bash/node.sh
+source "${BASH_SOURCE[0]%/*}/../lib/bash/node.sh"
+
+function main() {
+
+  local COMMAND="${1:-}"
+
+  if [[ -n "${COMMAND}" && "${COMMAND}" != "-"* ]]; then
+    if jq --exit-status ".scripts.\"dev:${COMMAND}\"" "./package.json" >/dev/null; then
+      COMMAND="dev:${COMMAND}"
+    elif ! jq --exit-status ".scripts.\"${COMMAND}\"" "./package.json" >/dev/null; then
+      echo "Script '${COMMAND}' not found." >&2
+      return 1
+    fi
+    shift
+  else
+    if [[ "${COMMAND}" == "--" ]]; then
+      shift
+    fi
+    COMMAND=""
+  fi
+
+  if [[ -z "${COMMAND}" ]]; then
+    COMMAND="dev"
+  fi
+
+  if [[ ! -d "./node_modules" ]]; then
+    "./pipeline/install"
+  fi
+
+  echo -e "${OK_COLOR}==> Debugging app..."
+
+  loadEnvKey --optional
+
+  echo "Finding debug port..."
+  local NODE_DEBUG_PORT=$((9229))
+  while (lsof -t -i ":${NODE_DEBUG_PORT}"); do
+    NODE_DEBUG_PORT=$((NODE_DEBUG_PORT + 1))
+  done
+  echo "Found ${NODE_DEBUG_PORT}."
+  export NODE_DEBUG_PORT="${NODE_DEBUG_PORT}"
+  sed -i.bak -E \
+    "s|\"port\": [0-9]+|\"port\": ${NODE_DEBUG_PORT}|g" \
+    "./.vscode/launch.json"
+  rm -rf "./.vscode/launch.json.bak"
+
+  # Kill old processes
+  echo "Cleaning up old nodemon processes..."
+  # shellcheck disable=SC2009
+  ps |
+    grep --invert-match "grep" |
+    (grep "nodemon" || true) |
+    (grep "${PWD}/" || true) |
+    awk '{print $1}' |
+    xargs kill
+
+  export NODE_ENV="development"
+
+  NPM="$(command -v npm)"
+
+  applyEnvVarsToTemplateFiles || removeGeneratedFiles
+
+  (
+    set -x
+    "${NPM}" run "${COMMAND[@]}" "$@"
+  )
+
+}
+
+main "$@"

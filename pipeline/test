@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+
+# shellcheck source=./lib/bash/core.sh
+source "${BASH_SOURCE[0]%/*}/../lib/bash/core.sh"
+
+# shellcheck source=./lib/bash/node.sh
+source "${BASH_SOURCE[0]%/*}/../lib/bash/node.sh"
+
+function main() {
+
+  local COMMAND="${1:-}"
+
+  if [[ -n "${COMMAND}" && "${COMMAND}" != "-"* ]]; then
+    if jq --exit-status ".scripts.\"test:${COMMAND}\"" "./package.json" >/dev/null; then
+      COMMAND="test:${COMMAND}"
+    elif ! jq --exit-status ".scripts.\"${COMMAND}\"" "./package.json" >/dev/null; then
+      echo "Script '${COMMAND}' not found." >&2
+      return 1
+    fi
+    shift
+  else
+    if [[ "${COMMAND}" == "--" ]]; then
+      shift
+    fi
+    COMMAND=""
+  fi
+
+  if [[ -z "${COMMAND}" ]]; then
+    COMMAND="test"
+  fi
+
+  if [[ ! -d "./node_modules" ]]; then
+    "./pipeline/install"
+  fi
+
+  echo -e "${OK_COLOR}==> Testing app..."
+
+  loadEnvKey --optional
+
+  NPM="$(command -v npm)"
+
+  (
+    # shellcheck disable=SC2030,SC2031
+    export NODE_ENV="test"
+    set -x
+    "${NPM}" run "${COMMAND[@]}" "$@"
+  )
+
+}
+
+main "$@"

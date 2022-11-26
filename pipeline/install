@@ -1,0 +1,107 @@
+#!/usr/bin/env bash
+
+# shellcheck source=./lib/bash/core.sh
+source "${BASH_SOURCE[0]%/*}/../lib/bash/core.sh"
+
+# shellcheck source=./lib/bash/templates.sh
+source "${BASH_SOURCE[0]%/*}/../lib/bash/templates.sh"
+
+# shellcheck source=./lib/bash/node.sh
+source "${BASH_SOURCE[0]%/*}/../lib/bash/node.sh"
+
+function main() {
+
+  local PRODUCTION="false"
+  if [[ "$*" == *"--production"* ]]; then
+    PRODUCTION="true"
+  fi
+
+  if [[ "${HOME:-}" == "/vercel" ]]; then
+    (
+      set -x
+      rm -rf "./node_modules"
+      rm -rf "./submodules/"*"/node_modules"
+    )
+  fi
+
+  echo -e "${OK_COLOR}==> Installing dependencies..."
+
+  applyEnvVarsToTemplateFiles || removeGeneratedFiles
+
+  # Fix git+ssh "unsupported option accept-new"
+  # See https://github.com/npm/git/issues/31#issuecomment-862267072
+  export GIT_SSH_COMMAND="ssh"
+
+  if [[ -n "${BITBUCKET_USERNAME:-}" && -n "${BITBUCKET_PASSWORD:-}" ]]; then
+    echo "Setting up Git for BitBucket..."
+    (
+      # set -x
+      git config --global url."https://${BITBUCKET_USERNAME}:${BITBUCKET_PASSWORD}@bitbucket.org/".insteadOf "ssh://git@bitbucket.org/" || true
+      git config --global url."https://${BITBUCKET_USERNAME}:${BITBUCKET_PASSWORD}@bitbucket.org/".insteadOf "git@bitbucket.org:" || true
+      git config --global url."https://${BITBUCKET_USERNAME}:${BITBUCKET_PASSWORD}@bitbucket.org/".insteadOf "https://bitbucket.org/" || true
+    )
+  fi
+
+  (
+    set -x
+    rm -rf "./package-lock.json"
+    rm -rf "./yarn.lock"
+    rm -rf "./yarnrc"
+    mv -f "./.yarnrc.generated.yml" "./.yarnrc.yml"
+    npm install --location=global "npm@latest"
+    npm install --location=global "yarn@latest"
+    npx yarn set version "stable" ||
+      npx yarn set version "stable"
+  )
+
+  export YARN_ENABLE_IMMUTABLE_INSTALLS="false"
+
+  if [[ -z "$*" ]]; then
+    (
+      set -x
+      yarn install ||
+        yarn install
+    )
+  else
+    (
+      set -x
+      yarn add "$@"
+    )
+  fi
+
+  (
+    set -x
+    yarn run "postinstall"
+  )
+
+  # Fix for "file:" in yarn
+  # - By default, yarn always copies for "file:", while NPM creates symbolic links
+  # - Change to "link:", yarn will not install indirect dependencies
+  jq --raw-output '.dependencies' "./package.json" |
+    (grep "file:" || true) |
+    while IFS="" read -r DEPENDENCY; do
+      echo "- Linking ${DEPENDENCY}..."
+      local D_NAME
+      D_NAME="$(sed -e 's|^ *"||' -e 's|":.*$||' <<<"${DEPENDENCY}")"
+      # echo "${D_NAME}"
+      local D_PATH
+      D_PATH="$(sed -e 's|.*": "file:||' -e 's|",$||' <<<"${DEPENDENCY}")"
+      # echo "${D_PATH}"
+      rm -rf "./node_modules/${D_NAME}"
+      if [[ "${D_NAME}" = *"/"* ]]; then
+        ln -s "../../${D_PATH}" "./node_modules/${D_NAME}"
+      else
+        ln -s "../${D_PATH}" "./node_modules/${D_NAME}"
+      fi
+    done
+
+  if [[ "${PRODUCTION}" != "true" ]]; then
+    (
+      set -x
+      yarn npm audit || true
+    )
+  fi
+
+}
+
+main "$@"

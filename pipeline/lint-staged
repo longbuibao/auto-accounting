@@ -1,0 +1,222 @@
+#!/usr/bin/env bash
+
+# shellcheck source=./lib/bash/core.sh
+source "${BASH_SOURCE[0]%/*}/../lib/bash/core.sh"
+
+# shellcheck source=./lib/bash/node.sh
+source "${BASH_SOURCE[0]%/*}/../lib/bash/node.sh"
+
+dependency "shellcheck"
+
+function main() {
+
+  echo -e "${OK_COLOR}==> Linting staged changes..."
+
+  if ! git merge HEAD >/dev/null; then
+    return
+  fi
+
+  echo "Stashing changes now..."
+
+  local STASHING_OUTPUT
+  STASHING_OUTPUT="$(
+    git stash push \
+      --keep-index \
+      --include-untracked \
+      --message "boilerplate-lint-staged"
+  )"
+
+  # Remove unwanted untracked files (from staged deleted files)
+  git clean -f -d
+
+  echo
+  echo "${STASHING_OUTPUT}"
+  echo
+
+  local STASH_EXISTS
+  if [[ "${STASHING_OUTPUT}" != "No local changes to save" ]]; then
+    STASH_EXISTS=true
+  fi
+
+  SHELL_FILES=()
+  ESLINT_FILES=()
+  TSC_FILES=()
+  MADGE_FILES=()
+  STYLELINT_FILES=()
+
+  local FILE_PATHS
+  FILE_PATHS="$(
+    git status --porcelain |
+      (grep -E '^M|^A|^R' || true) |
+      sed -E "s|^ *[A-Z]+ +||" |
+      sed -E "s|^.+-> +||"
+  )"
+
+  while IFS='' read -r FILE_PATH; do
+
+    if [[ ! -f "${FILE_PATH}" ]]; then
+      continue
+    fi
+
+    if [[ "${FILE_PATH}" == "build/"* ]]; then
+      continue
+    fi
+
+    local FILE="${FILE_PATH##*/}"
+
+    local EXTENSION="${FILE##*.}"
+    if [[ "${EXTENSION}" == "${FILE}" ]]; then
+      EXTENSION=""
+    fi
+    if [[ -n "${EXTENSION}" ]]; then
+      EXTENSION="$(tr '[:upper:]' '[:lower:]' <<<"${EXTENSION}")"
+    fi
+
+    if [[ -z "${EXTENSION}" ]]; then
+      local FIRST_LINE
+      FIRST_LINE=$(head -n 1 "${FILE_PATH}")
+      if [[ "${FIRST_LINE}" == "#!/"*"bash" ]]; then
+        SHELL_FILES+=("${FILE_PATH}")
+      fi
+    elif [[ "${EXTENSION}" == "sh" || "${EXTENSION}" == "bash" ]]; then
+      SHELL_FILES+=("${FILE_PATH}")
+    elif [[ "${EXTENSION}" == "js" || "${EXTENSION}" == "jsx" || "${EXTENSION}" == "ts" || "${EXTENSION}" == "tsx" ]]; then
+      ESLINT_FILES+=("${FILE_PATH}")
+      TSC_FILES+=("${FILE_PATH}")
+      MADGE_FILES+=("${FILE_PATH}")
+    elif [[ "${EXTENSION}" == "css" || "${EXTENSION}" == "less" || "${EXTENSION}" == "scss" || "${EXTENSION}" == "sss" ]]; then
+      STYLELINT_FILES+=("${FILE_PATH}")
+    fi
+
+  done <<<"${FILE_PATHS}"
+
+  if ((${#SHELL_FILES[@]} > 0)); then
+    set +e
+    (
+      set -x
+      shellcheck \
+        --external-sources \
+        "${SHELL_FILES[@]}" ||
+        shellcheck \
+          "${SHELL_FILES[@]}"
+    )
+    local EXIT_CODE=$?
+    if ((EXIT_CODE != 0)); then
+      (
+        set -x
+        git stash pop || true
+      )
+      return ${EXIT_CODE}
+    fi
+    set -e
+  fi
+
+  local NPX
+  NPX="$(command -v npx)"
+
+  if ((${#ESLINT_FILES[@]} > 0)); then
+    set +e
+    (
+      set -x
+      "${NPX}" eslint "${ESLINT_FILES[@]}"
+    )
+    local EXIT_CODE=$?
+    if ((EXIT_CODE != 0)); then
+      (
+        set -x
+        git stash pop || true
+      )
+      exit ${EXIT_CODE}
+    fi
+    set -e
+  fi
+
+  if ((${#TSC_FILES[@]} > 0)); then
+
+    # Prepare config file
+    local TSC_CONFIG="./tsconfig.staged.json"
+    echo '
+      {
+        "extends": "./tsconfig.json",
+        "include": [
+          "node_modules/**/*.d.ts",
+          "src/**/*.d.ts",
+    ' >"${TSC_CONFIG}"
+    local FIRST="true"
+    for TSC_FILE in "${TSC_FILES[@]}"; do
+      if [[ "${FIRST}" == "true" ]]; then
+        FIRST="false"
+      else
+        echo "," >>"${TSC_CONFIG}"
+      fi
+      echo "\"${TSC_FILE}\"" >>"${TSC_CONFIG}"
+    done
+    echo '
+        ]
+      }
+    ' >>"${TSC_CONFIG}"
+
+    set +e
+    (
+      set -x
+      "${NPX}" tsc --project "${TSC_CONFIG}" --noEmit
+    )
+    local EXIT_CODE=$?
+
+    # Remove config
+    rm -rf "${TSC_CONFIG}"
+
+    if ((EXIT_CODE != 0)); then
+      (
+        set -x
+        git stash pop || true
+      )
+      exit ${EXIT_CODE}
+    fi
+    set -e
+  fi
+
+  if ((${#MADGE_FILES[@]} > 0)); then
+    set +e
+    (
+      set -x
+      "${NPX}" madge "${MADGE_FILES[@]}"
+    )
+    local EXIT_CODE=$?
+    if ((EXIT_CODE != 0)); then
+      (
+        set -x
+        git stash pop || true
+      )
+      exit ${EXIT_CODE}
+    fi
+    set -e
+  fi
+
+  if ((${#STYLELINT_FILES[@]} > 0)); then
+    set +e
+    (
+      set -x
+      "${NPX}" stylelint "${STYLELINT_FILES[@]}"
+    )
+    local EXIT_CODE=$?
+    if ((EXIT_CODE != 0)); then
+      (
+        set -x
+        git stash pop || true
+      )
+      exit ${EXIT_CODE}
+    fi
+    set -e
+  fi
+
+  if [[ -n "${STASH_EXISTS:-}" ]]; then
+    (
+      set -x
+      git stash pop
+    )
+  fi
+
+}
+
+main "$@"

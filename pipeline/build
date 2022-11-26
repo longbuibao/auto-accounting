@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+
+# shellcheck source=./lib/bash/core.sh
+source "${BASH_SOURCE[0]%/*}/../lib/bash/core.sh"
+
+# shellcheck source=./lib/bash/templates.sh
+source "${BASH_SOURCE[0]%/*}/../lib/bash/templates.sh"
+
+# shellcheck source=./lib/bash/node.sh
+source "${BASH_SOURCE[0]%/*}/../lib/bash/node.sh"
+
+function main() {
+
+  local COMMAND="${1:-}"
+
+  if [[ -n "${COMMAND}" && "${COMMAND}" != "-"* ]]; then
+    if jq --exit-status ".scripts.\"build:${COMMAND}\"" "./package.json" >/dev/null; then
+      COMMAND="build:${COMMAND}"
+    elif ! jq --exit-status ".scripts.\"${COMMAND}\"" "./package.json" >/dev/null; then
+      echo "Script '${COMMAND}' not found." >&2
+      return 1
+    fi
+    shift
+  else
+    if [[ "${COMMAND}" == "--" ]]; then
+      shift
+    fi
+    COMMAND=""
+  fi
+
+  if [[ -z "${COMMAND}" ]]; then
+    COMMAND="build"
+  fi
+
+  if [[ ! -d "./node_modules" ]]; then
+    "${BASH_SOURCE[0]%/*}/install"
+  fi
+
+  echo -e "${OK_COLOR}==> Building app..."
+
+  loadEnvKey --optional
+
+  applyEnvVarsToTemplateFiles || removeGeneratedFiles
+
+  (
+    set -x
+    rm -rf "./build"
+  )
+
+  NPM="$(command -v npm)"
+
+  (
+    set -x
+    "${NPM}" run "${COMMAND[@]}" "$@"
+    "${NPM}" run "postbuild"
+  )
+
+  (
+    set -x
+    rm -rf "./build/test"
+    mv "./build/src/"* "./build" || true
+    rm -rf "./build/src"
+  )
+
+}
+
+main "$@"
